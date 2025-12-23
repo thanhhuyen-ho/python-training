@@ -370,3 +370,193 @@ def accessControl(failIf):
 
 # Now built-ins work because onInstance inherits __add__ and __str__
 # which explicitly route to self._wrapped.
+
+# Examples: Class Decorators - Singleton Pattern
+# 1. Dictionary-based Singleton
+instances = {}
+def singleton(aClass):
+    def onCall(*args, **kwargs):
+        if aClass not in instances:
+            instances[aClass] = aClass(*args, **kwargs)
+        return instances[aClass]
+    return onCall
+
+@singleton
+class Person:
+    def __init__(self, name, hours, rate):
+        self.name = name
+        self.hours = hours
+        self.rate = rate
+    def pay(self):
+        return self.hours * self.rate
+
+@singleton
+class Hack:
+    def __init__(self, val):
+        self.attr = val
+
+# Testing Singleton
+sue = Person('Sue', 50, 20)
+bob = Person('Bob', 40, 10) # Returns 'sue' object (Singleton)
+print(sue.name, sue.pay())  # Sue 1000
+print(bob.name, bob.pay())  # Sue 1000 (Bob was ignored)
+
+X = Hack(42)
+Y = Hack(99)
+print(X.attr, Y.attr)       # 42 42 (Only one instance)
+
+
+# 2. Alternative: Nonlocal Singleton (Cleaner scope)
+def singleton_nonlocal(aClass):
+    instance = None
+    def onCall(*args, **kwargs):
+        nonlocal instance
+        if instance is None:
+            instance = aClass(*args, **kwargs)
+        return instance
+    return onCall
+
+
+# Examples: Class Decorators - Interface Tracing
+def Tracer(aClass):
+    class Wrapper:
+        def __init__(self, *args, **kargs):
+            self.fetches = 0
+            self.wrapped = aClass(*args, **kargs)
+        def __getattr__(self, attrname):
+            print('Trace: ' + attrname)
+            self.fetches += 1
+            return getattr(self.wrapped, attrname)
+    return Wrapper
+
+@Tracer
+class Spam:
+    def display(self):
+        print('Spam!' * 2)
+
+food = Spam()
+food.display() 
+# Output:
+# Trace: display
+# Spam!Spam!
+print(f"Total fetches: {food.fetches}") # Output: 1
+
+
+# Examples: Private Attributes (Access Control)
+traceMe = False
+def trace(*args): 
+    if traceMe: print('[' + ' '.join(map(str, args)) + ']')
+
+def Private(*privates):
+    def onDecorator(aClass):
+        class onInstance:
+            def __init__(self, *args, **kargs):
+                self.wrapped = aClass(*args, **kargs)
+            def __getattr__(self, attr):
+                trace('get:', attr)
+                if attr in privates:
+                    raise TypeError('private attribute fetch: ' + attr)
+                return getattr(self.wrapped, attr)
+            def __setattr__(self, attr, value):
+                trace('set:', attr, value)
+                if attr == 'wrapped':
+                    self.__dict__[attr] = value
+                elif attr in privates:
+                    raise TypeError('private attribute change: ' + attr)
+                else:
+                    setattr(self.wrapped, attr, value)
+        return onInstance
+    return onDecorator
+
+@Private('data', 'size')
+class Doubler:
+    def __init__(self, label, start):
+        self.label = label
+        self.data = start
+    def size(self):
+        return len(self.data)
+    def display(self):
+        print(f'{self.label} => {self.data}')
+
+X = Doubler('X is', [1, 2, 3])
+X.display()      # Works: Internal access allowed
+# print(X.size())  # TypeError: private attribute fetch: size
+# X.data = [0]     # TypeError: private attribute change: data
+
+
+# Examples: Validating Arguments (Range Test - Positional)
+def rangetest_simple(*argchecks):
+    def onDecorator(func):
+        if not __debug__: # Optimization: python -O skips checks
+            return func
+        else:
+            def onCall(*args):
+                for (ix, low, high) in argchecks:
+                    if args[ix] < low or args[ix] > high:
+                        raise TypeError(f'Arg {ix} not in {low}..{high}')
+                return func(*args)
+            return onCall
+    return onDecorator
+
+@rangetest_simple((1, 0, 120)) # Check arg at index 1 is 0..120
+def persinfo(name, age):
+    print(f'{name} is {age} years old')
+
+persinfo('Bob', 45) # Bob is 45 years old
+# persinfo('Bob', 200) # TypeError: Arg 1 not in 0..120
+
+
+# Examples: Validating Arguments (Introspection - Keywords/Defaults)
+def rangetest(**argchecks):
+    def onDecorator(func):
+        if not __debug__: return func
+        # Introspection
+        code = func.__code__
+        all_args = code.co_varnames[:code.co_argcount]
+        funcname = func.__name__
+
+        def onCall(*pargs, **kargs):
+            # Map positional args to names
+            positionals = all_args[:len(pargs)]
+            
+            for (argname, (low, high)) in argchecks.items():
+                # Check if passed by keyword
+                if argname in kargs:
+                    if kargs[argname] < low or kargs[argname] > high:
+                        raise TypeError(f'{funcname} arg "{argname}" fail')
+                # Check if passed by position
+                elif argname in positionals:
+                    position = positionals.index(argname)
+                    if pargs[position] < low or pargs[position] > high:
+                        raise TypeError(f'{funcname} arg "{argname}" fail')
+                # Else: Default used (skip check
+            return func(*pargs, **kargs)
+        return onCall
+    return onDecorator
+
+@rangetest(percent=(0.0, 1.0))
+def giveRaise(name, percent):
+    print(f"{name} got {percent:.1%} raise")
+
+giveRaise('Sue', 0.10)          # Sue got 10.0% raise
+giveRaise(percent=0.20, name='Bob') # Bob got 20.0% raise
+# giveRaise('Tom', 1.5)         # TypeError: giveRaise arg "percent" fail
+
+
+# Examples: Argument Validation via Annotations
+def rangetest_annot(func):
+    def onCall(*pargs, **kargs):
+        argchecks = func.__annotations__
+        # (Validation logic would go here, similar to above)
+        print(f"Validating using: {argchecks}")
+        return func(*pargs, **kargs)
+    return onCall
+
+# @rangetest_annot
+# def func(a:'(1, 5)', b, c:'(0.0, 1.0)'):
+#     print(a + b + c)
+
+# func(1, 2, c=3) 
+# Output:
+# Validating using: {'a': (1, 5), 'c': (0.0, 1.0)}
+# 6
